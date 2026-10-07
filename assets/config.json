@@ -5,8 +5,6 @@
   "mascot_count": 3,
   "show_clock": true,
   "wallpaper_path": null,
-  "installed_apps": [
-    "tetris"
-  ],
+  "installed_apps": [],
   "username": "owlito"
 }
