@@ -1,36 +1,23 @@
 """
 DOOM 0W07 — a raycaster FPS for the 0W07 desktop.
-
-Standalone:  python doom.py
-From 0W07:   main.py calls install_context(SOUNDS, RetroWindow) at startup.
-             This injects the OS's sound manager and window base class so
-             Doom integrates with the desktop without a circular import.
 """
 import math
-import random
 import tkinter as tk
 import time
 import traceback
 
 
-# ============================================================
-#  Injected context (defaults allow standalone use)
-# ============================================================
 SOUNDS = None
 OW07_RETRO_WINDOW = None
 
 
 class _StubSounds:
-    """Fallback used when doom.py runs standalone."""
     def click(self): pass
     def error(self): pass
     def mascot(self): pass
 
 
 class _StubRetro(tk.Toplevel):
-    """Minimal window shell for standalone runs (no title bar buttons
-    hooked into the 0W07 taskbar)."""
-
     def __init__(self, master, title="Window", width=300, height=200,
                  x=120, y=120, desktop=None, **kwargs):
         super().__init__(master)
@@ -69,8 +56,6 @@ class _StubRetro(tk.Toplevel):
 
 
 def install_context(sounds_module, retro_window_class):
-    """Called by main.py at startup. Injects the OS's SOUNDS and
-    RetroWindow so Doom integrates with the desktop."""
     global SOUNDS, OW07_RETRO_WINDOW
     SOUNDS = sounds_module
     OW07_RETRO_WINDOW = retro_window_class
@@ -81,9 +66,6 @@ def _sounds():
     return SOUNDS if SOUNDS is not None else _StubSounds()
 
 
-# ============================================================
-#  Doom implementation (mixed into the injected base at runtime)
-# ============================================================
 class _DoomImpl:
     RES = 4
     FOV = math.pi / 3
@@ -91,15 +73,15 @@ class _DoomImpl:
     MAP_STR = [
         "####################",
         "#..................#",
-        "#..####..####..##..#",
-        "#..#..........#..#.#",
-        "#..#..######..#..#.#",
-        "#.....#....#.....#.#",
+        "#..####....####....#",
+        "#..#..........#....#",
+        "#..#..######..#....#",
+        "#.....#....#.......#",
         "#.....#....#.......#",
         "#..#..#....#..#....#",
-        "#..#..######..#..#.#",
-        "#..#..........#..#.#",
-        "#..####..####..##..#",
+        "#..#..######..#....#",
+        "#..#..........#....#",
+        "#..####....####....#",
         "#..................#",
         "####################",
     ]
@@ -112,6 +94,8 @@ class _DoomImpl:
         "demon": {"emoji": "👹", "hp": 3, "speed": 0.018, "damage": 18,
                   "color": "#ffd4d4"},
     }
+
+    MOUSE_SENS = 0.004
 
     def __init__(self, master, desktop=None):
         super().__init__(master, title="DOOM 0W07",
@@ -128,16 +112,16 @@ class _DoomImpl:
         self.map_w = len(self.map[0])
         self.map_h = len(self.map)
 
-        # Player state
-        self.px = 2.5
-        self.py = 2.5
+        # Spawn in an open outer corridor, facing east toward the middle
+        self.px = 3.5
+        self.py = 6.5
         self.pa = 0.0
 
         self.keys = set()
         self.health = 100
         self.score = 0
         self.ammo = 30
-        self.max_ammo = 30
+        self.max_ammo = 50
         self.game_over = False
         self.won = False
         self.shoot_cooldown = 0
@@ -150,20 +134,37 @@ class _DoomImpl:
         self.canvas = tk.Canvas(self.content, width=self.W, height=self.H,
                                 bg="black", highlightthickness=0, bd=0)
         self.canvas.pack(padx=4, pady=(4, 2))
+        # The canvas needs to be focusable to receive key events via bind
+        self.canvas.focus_set()
 
         bar = tk.Frame(self.content, bg="#c0c0c0")
         bar.pack(fill="x", padx=4, pady=(0, 4))
-        tk.Label(bar, text="WASD move · ← → turn · click to shoot",
+        tk.Label(bar,
+                 text="WASD move · mouse turn · click shoot · ESC unfocus",
                  bg="#c0c0c0", fg="#7a2050",
                  font=("MS Sans Serif", 8)).pack(side="left")
         tk.Button(bar, text="New Game", font=("MS Sans Serif", 8),
                   command=self.reset).pack(side="right")
 
+        self._mouse_center = self.W // 2
+        self._mouse_center_y = self.H // 2
+        self._mouse_locked = False
+
         # ---------- Input ----------
+        # Bind keys on the toplevel AND the canvas so they work no matter
+        # which widget has focus
         self.bind("<Key>", self.on_key)
         self.bind("<KeyRelease>", self.on_key_release)
+        self.canvas.bind("<Key>", self.on_key)
+        self.canvas.bind("<KeyRelease>", self.on_key_release)
+
         self.canvas.bind("<Button-1>", self._canvas_click)
+        self.canvas.bind("<Button-3>", self._on_right_click)
+        self.canvas.bind("<Motion>", self._on_mouse_move)
+        self.canvas.bind("<Enter>", self._on_mouse_enter)
+        self.canvas.bind("<Leave>", self._on_mouse_leave)
         self.bind("<Button-1>", lambda e: self.focus_force(), add="+")
+        self.bind("<Escape>", self._unfocus)
 
         self.after(120, self._grab_focus)
 
@@ -171,22 +172,80 @@ class _DoomImpl:
         self._last_time = None
         self.tick()
 
+    # ============================================================
+    #  Focus / mouse handling
+    # ============================================================
     def _grab_focus(self):
         try:
             self.focus_force()
             self.lift()
+            self.canvas.focus_set()
         except Exception:
             pass
 
+    def _unfocus(self, event=None):
+        self._mouse_locked = False
+        try:
+            self.canvas.config(cursor="")
+        except Exception:
+            pass
+        self.keys.clear()
+
     def _canvas_click(self, event):
-        self.focus_force()
+        # Always grab focus on any click
+        try:
+            self.focus_force()
+            self.canvas.focus_set()
+        except Exception:
+            pass
+
+        if not self._mouse_locked:
+            self._mouse_locked = True
+            try:
+                self.canvas.config(cursor="none")
+            except Exception:
+                pass
+            return
         self.shoot()
+
+    def _on_right_click(self, event):
+        try:
+            self.focus_force()
+            self.canvas.focus_set()
+        except Exception:
+            pass
+
+    def _on_mouse_move(self, event):
+        if not self._mouse_locked:
+            return
+        dx = event.x - self._mouse_center
+        if abs(dx) < 2:
+            return
+        self.pa += dx * self.MOUSE_SENS
+        try:
+            self.canvas.event_generate(
+                "<Motion>", warp=True,
+                x=self._mouse_center, y=self._mouse_center_y)
+        except Exception:
+            pass
+
+    def _on_mouse_enter(self, event):
+        if self._mouse_locked:
+            try:
+                self.canvas.config(cursor="none")
+            except Exception:
+                pass
+
+    def _on_mouse_leave(self, event):
+        # Don't unlock on mouse-leave — the warp keeps the cursor inside
+        # anyway, and unlocking on every jitter is annoying.
+        pass
 
     # ============================================================
     #  Game state
     # ============================================================
     def reset(self):
-        self.px, self.py, self.pa = 2.5, 2.5, 0.0
+        self.px, self.py, self.pa = 3.5, 6.5, 0.0
         self.health = 100
         self.score = 0
         self.ammo = 30
@@ -197,10 +256,15 @@ class _DoomImpl:
 
     def spawn_enemies(self):
         self.enemies = []
+        # All positions are verified open cells and visible from spawn
+        # or just one wall away.
         positions = [
-            (8, 3, "skull"), (14, 3, "ghost"),
-            (5, 8, "demon"), (15, 8, "skull"),
-            (10, 5, "ghost"), (10, 9, "demon"),
+            (10, 6, "skull"),   # straight ahead, in the mid corridor
+            (5, 3, "ghost"),    # upper-left, close
+            (5, 9, "demon"),    # lower-left, close
+            (14, 3, "skull"),   # upper-right
+            (14, 9, "ghost"),   # lower-right
+            (10, 11, "demon"),  # bottom middle
         ]
         for x, y, kind in positions:
             self.enemies.append({
@@ -313,6 +377,15 @@ class _DoomImpl:
     def tick(self):
         if not self.winfo_exists():
             return
+
+        # Keep the game window focused while mouse is locked
+        if self._mouse_locked:
+            try:
+                if self.focus_get() is not self.canvas:
+                    self.canvas.focus_set()
+            except Exception:
+                pass
+
         try:
             now = time.time()
             if self._last_time is None:
@@ -339,7 +412,6 @@ class _DoomImpl:
             pass
 
     def update(self, dt):
-        # Movement
         speed = 3.0 * dt
         rot = 2.2 * dt
         fx, fy = math.cos(self.pa), math.sin(self.pa)
@@ -358,21 +430,18 @@ class _DoomImpl:
         if "right" in self.keys:
             self.pa += rot
 
-        # Wall-sliding movement
         nx, ny = self.px + mvx, self.py + mvy
         if not self.is_wall(int(nx), int(self.py)):
             self.px = nx
         if not self.is_wall(int(self.px), int(ny)):
             self.py = ny
 
-        # Timers
         if self.shoot_cooldown > 0:
             self.shoot_cooldown -= dt
         if self.hurt_flash > 0:
             self.hurt_flash -= dt
         self.ammo = min(self.max_ammo, self.ammo + 0.6 * dt)
 
-        # Enemies
         for e in self.enemies:
             if not e["alive"]:
                 continue
@@ -396,11 +465,12 @@ class _DoomImpl:
             if d < 1.5 and e["attack_cd"] <= 0:
                 self.health -= kind["damage"]
                 self.hurt_flash = 0.3
-                e["attack_cd"] = 1.0
+                e["attack_cd"] = 1.5
                 self._snd.error()
                 if self.health <= 0:
                     self.health = 0
                     self.game_over = True
+                    self.hurt_flash = 0
 
     # ============================================================
     #  Rendering
@@ -409,13 +479,11 @@ class _DoomImpl:
         c = self.canvas
         c.delete("all")
 
-        # Ceiling + floor
         c.create_rectangle(0, 0, self.W, self.H // 2,
                            fill="#2a0a1a", outline="")
         c.create_rectangle(0, self.H // 2, self.W, self.H,
                            fill="#1a0810", outline="")
 
-        # Walls
         self.depth_buffer = [1e9] * self.num_rays
         for ray_i in range(self.num_rays):
             ray_angle = self.pa - self.half_fov + (ray_i / self.num_rays) * self.FOV
@@ -427,13 +495,12 @@ class _DoomImpl:
             top = self.H // 2 - wall_h // 2
             bot = self.H // 2 + wall_h // 2
             base = 120 if side == 0 else 180
-            shade = max(20, min(255, base - int(corrected * 8)))
-            color = f"#{shade:02x}{shade // 3:02x}{shade // 2:02x}"
+            shade = max(20, min(255, base - int(corrected * 20)))
+            color = f"#{shade:02x}{shade // 5:02x}{shade // 2:02x}"
             c.create_rectangle(ray_i * self.RES, top,
                                (ray_i + 1) * self.RES, bot,
                                fill=color, outline="")
 
-        # Enemies — sorted back to front
         visible = [e for e in self.enemies if e["alive"]]
         for e in visible:
             ex, ey = e["x"] - self.px, e["y"] - self.py
@@ -466,7 +533,6 @@ class _DoomImpl:
             c.create_text(sx, sy, text=kind["emoji"],
                           font=("Segoe UI Emoji", max(8, int(size * 0.7))))
 
-        # HUD
         hb_w, hb_h, hb_x = 160, 14, 20
         hb_y = self.H - 30
         c.create_rectangle(hb_x, hb_y, hb_x + hb_w, hb_y + hb_h,
@@ -485,12 +551,10 @@ class _DoomImpl:
                       text=f"Score: {self.score}",
                       fill="#ffd6e8", font=("MS Sans Serif", 10, "bold"))
 
-        # Crosshair
         cx, cy = self.W // 2, self.H // 2
         c.create_line(cx - 8, cy, cx + 8, cy, fill="#ff69b4", width=2)
         c.create_line(cx, cy - 8, cx, cy + 8, fill="#ff69b4", width=2)
 
-        # Gun
         gun_y = self.H - 20
         c.create_polygon(self.W // 2 - 20, gun_y,
                          self.W // 2 + 20, gun_y,
@@ -501,12 +565,10 @@ class _DoomImpl:
                            self.W // 2 + 6, gun_y - 50,
                            fill="#606060", outline="#c85fa0")
 
-        # Damage flash
         if self.hurt_flash > 0:
             c.create_rectangle(0, 0, self.W, self.H, fill="#ff0000",
                                outline="", stipple="gray50")
 
-        # End screens
         if self.game_over:
             c.create_rectangle(0, self.H // 2 - 50, self.W, self.H // 2 + 50,
                                fill="#1a0810", outline="#ff3050", width=3)
@@ -524,9 +586,6 @@ class _DoomImpl:
                           text=f"Score: {self.score} — Click New Game",
                           fill="white", font=("MS Sans Serif", 10))
 
-    # ============================================================
-    #  Cleanup
-    # ============================================================
     def _close(self):
         if getattr(self, "_job", None):
             try:
@@ -535,30 +594,24 @@ class _DoomImpl:
                 pass
             self._job = None
         try:
+            self.canvas.config(cursor="")
+        except Exception:
+            pass
+        try:
             super()._close()
         except AttributeError:
             self.destroy()
 
 
-# ============================================================
-#  Factory — the only public entry point for opening a Doom window
-# ============================================================
 def DoomWindow(master, desktop=None):
-    """Build and return a live Doom window."""
     base = OW07_RETRO_WINDOW if OW07_RETRO_WINDOW else _StubRetro
 
-    # IMPORTANT: _DoomImpl must come FIRST in the bases so its __init__
-    # runs. It calls super().__init__() which then hits the base window's
-    # __init__ via the MRO.
     class _DoomWindow(_DoomImpl, base):
         pass
 
     return _DoomWindow(master, desktop=desktop)
 
 
-# ============================================================
-#  Standalone launcher
-# ============================================================
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("DOOM 0W07 (standalone)")

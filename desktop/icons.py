@@ -17,7 +17,6 @@ BUILTIN_ICONS = [
     ("Calculator",  "🧮", "#fff5b8", "✨", "open_calculator"),
     ("Snake",       "🐍", "#c8f5c8", "💚", "open_snake"),
     ("Pong",        "🏓", "#ffd4d4", "💗", "open_pong"),
-    ("Doom",        "👹", "#ffd0d0", "⚔",  "open_doom"),
     ("Settings",    "⚙",  "#e8e8ff", "🌸", "open_settings"),
     ("Recycle Bin", "🗑",  "#ffd6e8", "💫", "open_recycle"),
 ]

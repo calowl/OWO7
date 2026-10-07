@@ -29,6 +29,13 @@ STORE_APPS = [
         "description": "Roll 1-6 dice. Great for games.",
         "size": "2 KB", "category": "Utilities",
     },
+    {
+        "id": "doom",
+        "name": "DOOM",
+        "icon": "👹", "pastel": "#ffd0d0", "accent": "⚔",
+        "description": "A retro raycaster FPS. WASD to move, mouse to aim.",
+        "size": "64 KB", "category": "Games",
+    },
 ]
 
 

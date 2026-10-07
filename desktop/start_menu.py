@@ -21,7 +21,6 @@ class StartMenu:
         ("File Explorer", "open_file_explorer"),
         ("Snake",         "open_snake"),
         ("Pong",          "open_pong"),
-        ("DOOM",          "open_doom"),
     ]
 
     def __init__(self, root, desktop):
