@@ -1,0 +1,12 @@
+{
+  "text_scale": 1.0,
+  "desktop_color": "#008080",
+  "mascots_enabled": false,
+  "mascot_count": 3,
+  "show_clock": true,
+  "wallpaper_path": null,
+  "installed_apps": [
+    "tetris"
+  ],
+  "username": "owlito"
+}
